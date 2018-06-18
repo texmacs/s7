@@ -9944,7 +9944,7 @@
 			    (for-each (lambda (f)
 					(hash-table-set! h f #t))
 				      '(print-length safety cpu-time heap-size max-heap-size free-heap-size gc-freed max-string-length max-list-length 
-				        max-vector-length max-vector-dimensions default-hash-table-length initial-string-port-length 
+				        max-vector-length max-vector-dimensions default-hash-table-length initial-string-port-length memory-usage
 					gc-protected-objects file-names rootlet-size c-types stack-top stack-size stacktrace-defaults
 					max-stack-size stack catches exits float-format-precision bignum-precision default-rationalize-error 
 					default-random-state morally-equal-float-epsilon hash-table-float-epsilon undefined-identifier-warnings 
@@ -14549,7 +14549,11 @@
 	    (if (or (< (length form) 4)
 		    (not (symbol? (cadr form))))
 		(begin
-		  (lint-format "~A declaration is messed up: ~A" caller (car form) (truncated-list->string form))
+		  (if (and (> (length form) 2)
+			   (pair? (cadr form))
+			   (symbol? (caadr form)))
+		      (lint-format "~A used where s7 uses define-~A: ~A?" caller (car form) (car form) (truncated-list->string form))
+		      (lint-format "~A declaration is messed up: ~A" caller (car form) (truncated-list->string form)))
 		  env)
 		(let ((sym (cadr form))
 		      (args (caddr form))
