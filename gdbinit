@@ -45,14 +45,34 @@ show all non-global variables that are currently accessible
 end
 
 
+define s7history
+print s7_show_history(cur_sc)
+end
+document s7history
+show the entries in the history buffer
+end
+
+define s7crawl
+print s7_show_stack(cur_sc)
+end
+document s7history
+show the ops in the stack
+end
+
+
 define s7bt
 set logging overwrite on
 set logging redirect on
 set logging on
-bt
+if $argc == 1
+  bt $arg0
+end
+if $argc == 0)
+  bt
+end
 set logging off
 # now gdb.txt has the backtrace
-print s7_decode_bt()
+print s7_decode_bt(cur_sc)
 end
 document s7bt
 print a C backtrace with s7 objects decoded as much as possible
@@ -62,9 +82,14 @@ define s7btfull
 set logging overwrite on
 set logging redirect on
 set logging on
-bt full
+if $argc == 1
+  bt full $arg0
+end
+if $argc == 0)
+  bt full
+end
 set logging off
-print s7_decode_bt()
+print s7_decode_bt(cur_sc)
 end
 document s7btfull
 print a full C backtrace with s7 objects decoded as much as possible

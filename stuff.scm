@@ -48,9 +48,9 @@
 	     (if (not (null? info))
 		 (format p ": ~A" info))))
 
-       (format p "~%error-code: ~S~%" (ow 'error-code))
+       (format p "~%error-code: ~S" (ow 'error-code))
        (when (ow 'error-line)
-	 (format p "~%error-file/line: ~S[~A]~%" (ow 'error-file) (ow 'error-line)))
+	 (format p "~%error-file/line: ~A[~A]" (ow 'error-file) (ow 'error-line)))
 	   
        ;; show history, if available
        (when (pair? (ow 'error-history)) ; a circular list, starts at error-code, entries stored backwards
@@ -108,14 +108,16 @@
 	       vals)
      ,@(map (lambda (val)
 	      (if (pair? (cddr val))
-		  `(set! (symbol-setter ',(car val)) 
-			 (lambda (s v)
-			   (if (not (,(caddr val) v))
-			       (error 'wrong-type-arg "(set! ~S ~S) but ~S is not ~A" s v v ',(caddr val)))
-			   v))
+		  `(set! (setter ',(car val))
+			 (if (not (,(caddr val) ,(car val))) ; check initial value (already set)
+			     (error 'wrong-type "initial value ~S is not ~S" ,(car val) ,(caddr val))
+			     ,(caddr val)))                  ; assume built-in type here
 		  (values)))
 	    vals)
      ,@body))
+
+(define-macro (typed-inlet . vals) ; vals: ((var init [type])...)...) as in (typed-inlet (i 0 integer?)...)
+  `(typed-let ,vals (curlet)))
 
 
 ;;; ----------------
@@ -130,6 +132,13 @@
 (define (ninth obj)  (if (sequence? obj) (obj 8) (error 'wrong-type-arg "ninth argument, ~S, is not a sequence" obj)))
 (define (tenth obj)  (if (sequence? obj) (obj 9) (error 'wrong-type-arg "tenth argument, ~S, is not a sequence" obj)))
 
+(define (built-in? x) 
+  (not (undefined? (eval-string (string-append "#_" (object->string x)))))) ; just a guess...
+
+(define (the type expr) 
+  (if (type expr)
+      expr
+      (error 'bad-type "~S is ~S but should be ~S" expr (type-of expr) type)))
 
 (define iota 
   (let ((+documentation+ "(iota n (start 0) (incr 1)) returns a list counting from start for n:\n\
@@ -191,15 +200,7 @@
 	  (copy lis :readable)
 	  lis))))
 
-(define tree-member 
-  (let ((+documentation+ "(tree-member sym tree) returns #t if sym is found anywhere in tree:\n\
-    (tree-member 'a '(1 (2 a))) -> #t"))
-    (lambda (sym tree)
-      (and (pair? tree)
-	   (or (eq? (car tree) sym)
-	       (and (pair? (car tree))
-		    (tree-member sym (car tree)))
-	       (tree-member sym (cdr tree)))))))
+(define tree-member tree-memq)
 
 (define adjoin 
   (let ((+documentation+ "(adjoin obj lst) adds obj to lst if it is not already in lst, returning the new list"))
@@ -367,14 +368,14 @@
 	   ,@(map (lambda (binding)
 		    (list (car binding) (cadr binding)))
 		  vars))
-       ,@(do ((setter setters (cdr setter))
+       ,@(do ((s setters (cdr s))
 	      (var vars (cdr var))
 	      (i 0 (+ i 1))
 	      (result ()))
-	     ((null? setter)
+	     ((null? s)
 	      (reverse result))
-	   (if (car setter)
-	       (set! result (cons `(set! (symbol-setter (quote ,(caar var))) (list-ref ,gsetters ,i)) result))))
+	   (if (car s)
+	       (set! result (cons `(set! (setter (quote ,(caar var))) (list-ref ,gsetters ,i)) result))))
        ,@body)))
 
 (define-macro (while test . body)      ; while loop with predefined break and continue
@@ -1202,7 +1203,7 @@ Unlike full-find-if, safe-find-if can handle any circularity in the sequences.")
 			    (if (not (let? p))
 				(apply format p args)
 				(write (apply format #f args) p))))))
-    (make-shared-vector v (list i)))) ; ignore extra trailing elements
+    (subvector v (list i)))) ; ignore extra trailing elements
 
 
 
@@ -1232,7 +1233,7 @@ Unlike full-find-if, safe-find-if can handle any circularity in the sequences.")
 (define-macro (reflective-let vars . body)
   `(let ,vars
      ,@(map (lambda (vr)
-	      `(set! (symbol-setter ',(car vr))
+	      `(set! (setter ',(car vr))
 		     (lambda (s v)
 		       (format *stderr* "~S -> ~S~%" s v)
 		       v)))
@@ -1267,336 +1268,8 @@ Unlike full-find-if, safe-find-if can handle any circularity in the sequences.")
 
 
 ;;; ----------------
-
-(define (gather-symbols expr ce lst ignore)
-  (cond ((symbol? expr)
-	 (if (or (memq expr lst)
-		 (memq expr ignore)
-		 (procedure? (symbol->value expr ce))
-		 (eq? (let symbol->let ((sym expr)
-					(ce ce))
-			(if (defined? sym ce #t)
-			    ce
-			    (and (not (eq? ce (rootlet)))
-				 (symbol->let sym (outlet ce)))))
-		      (rootlet)))
-	     lst
-	     (cons expr lst)))
-
-	((not (pair? expr)) lst)
-
-	((not (and (pair? (cdr expr)) (pair? (cddr expr))))
-	 (if (eq? (car expr) '_)
-	     (cons expr lst)
-	     (gather-symbols (cdr expr) ce (gather-symbols (car expr) ce lst ignore) ignore)))
-
-	((pair? (cadr expr))
-	 (gather-symbols (case (car expr)
-			   ((let let* letrec letrec* do)
-			    (values (cddr expr) ce lst (append ignore (map car (cadr expr)))))
-			   ((lambda) 
-			    (values (cddr expr) ce lst (append ignore (cadr expr))))
-			   ((lambda*)
-			    (values (cddr expr) ce lst (append ignore (map (lambda (a) (if (pair? a) (car a) a)) (cadr expr)))))
-			   (else
-			    (values (cdr expr) ce (gather-symbols (car expr) ce lst ignore) ignore)))))
-
-	((and (eq? (car expr) 'lambda)
-	      (symbol? (cadr expr)))
-	 (gather-symbols (cddr expr) ce lst (append ignore (list (cadr expr)))))
-
-	(else 
-	 (gather-symbols (cdr expr) ce (gather-symbols (car expr) ce lst ignore) ignore))))
-
-
-(define-bacro (reactive-set! place value)
-  (with-let (inlet 'place place                      ; with-let here gives us control over the names
-		   'value value 
-		   'e (outlet (curlet)))             ; the run-time (calling) environment
-    (let ((nv (gensym))
-	  (ne (gensym)))
-      `(begin
-	 (define ,ne ,e)
-	 ,@(map (lambda (sym)
-		  (if (symbol? sym)
-		      `(set! (symbol-setter ',sym)
-			     (lambda (s v)  
-			       (let ((,nv ,(if (not (with-let (sublet e 'sym sym) 
-						      (symbol-setter sym)))
-					       'v
-					       `(begin (,(procedure-source (with-let (sublet e 'sym sym) 
-									     (symbol-setter sym))) 
-							s v)))))
-				 (with-let (sublet ,ne ',sym ,nv)
-				   (set! ,place ,value))
-				 ,nv)))
-		      (if (not (and (eq? (car sym) '_)
-				    (pair? (cdr sym))
-				    (integer? (cadr sym))
-				    (null? (cddr sym))))
-			  (error 'wrong-type-arg "reactive-vector can't handle: ~S~%" sym)
-			  (let ((index (cadr sym)))
-			    `(set! (_ 'local-set!)
-				   (apply lambda '(obj i val)
-					  (append (cddr (procedure-source (_ 'local-set!)))
-						  `((if (= i ,,index) (set! ,',place ,',value))))))))))
-		(gather-symbols value e () ()))
-	 (set! ,place ,value)))))
-
-#|
-(let ((a 1)
-      (b 2)
-      (c 3))
-  (reactive-set! b (+ c 4))  ; order matters!
-  (reactive-set! a (+ b c))
-  (set! c 5)
-  a)
-
-(let ((a 1) (v (vector 1 2 3))) (reactive-set! (v 1) (* a 3)) (set! a 4) v)
-|#
-
-;; just a first stab at this:
-
-(define reactive-vector
-  (let ()
-    (require mockery.scm)
-    (define make-mock-vector (*mock-vector* 'make-mock-vector))
-
-    (define (reactive-vector-1 e . args)
-      ;; set up accessors for any element that has an expression as its initial value
-      ;; if any element depends on some other element, return a mock-vector with setter fixed up
-
-      (let ((code `(let ((_ (,(if (any? (lambda (a) 
-					  (tree-member '_ a)) 
-					args)
-				  '((funclet reactive-vector) 'make-mock-vector)
-				  'make-vector)
-			     ,(length args)))))))
-	(let ((ctr 0))
-	  (for-each
-	   (lambda (arg)
-	     (set! code (append code `((reactive-set! (_ ,ctr) ,arg))))
-	     (set! ctr (+ ctr 1)))
-	   args))
-	(append code `(_))))
-    
-    (define-bacro (reactive-vector . args)
-      (apply ((funclet reactive-vector) 'reactive-vector-1) (outlet (curlet)) args))))
-
-
-#|
-(let ((a 1)) (let ((v (reactive-vector a (+ a 1) 2))) (set! a 4) v)) -> #(4 5 2)
-(let* ((a 1) (v (reactive-vector a (+ a 1) 2))) (set! a 4) v) -> #(4 5 2)
-(let* ((a 1) (v (reactive-vector a (+ a 1) (* 2 (_ 0))))) (set! a 4) v) -> #(4 5 8)
-;;; mock-vector could also be used for constant or reflective vectors, etc -- just like symbol-setter but element-wise
-|#
-
-;; another experiment:
-
-(define-bacro (reactive-format port ctrl . args)
-  (with-let (inlet 'e (outlet (curlet))
-		   'args args
-		   'port port
-		   'ctrl ctrl)
-    (let* ((syms (gather-symbols args e () ()))
-	   (sa's (map symbol-setter syms)))
-      `(begin
-	 ,@(map (lambda (sym sa)
-		  `(set! (symbol-setter ',sym) 
-			 (lambda (s v)
-			   (let ((result (if ,sa (apply ,sa s v ()) v)))
-			     (with-let (sublet ,e ',sym result)
-			       (format ,port ,ctrl ,@args)) ; is this equivalent to an exported closure in the GC?
-			     result))))
-		syms sa's)
-	 (format ,port ,ctrl ,@args)))))
-
-
-;;; this is not pretty
-;;; part of the complexity comes from the hope to be tail-callable, but even a version
-;;;   using dynamic-wind is complicated because of shadowing
-;;; what I think we want here is a globally accessible way to see set! that does not
-;;;   require non-local state (not a hook with its list of functions, or symbol-setter)
-;;;   and that doesn't bring s7 to a halt.  Perhaps a symbol-setter function that
-;;;   traverses the let-chain (like *features*) looking for something??  But the relevant
-;;;   chain is on the stack (is it?), so it won't be quick.  And weak refs are asking for trouble.
-;;;   (let ((a 1)) (define (set-a x) (set! a x)) (let ((b 2)) (reactive-set! b (+ a 1)) (set-a 3) b))
-;;;   Perhaps a way to share the original's slot?  No slow down, transparent, local setter can
-;;;   run its own accessor, set -> shared slot so all sharers see the new value,
-;;;   but how to trigger all accessors?
-;;;     (set! (symbol-slot 'a e1) (symbol-slot 'a e2))
-;;;   this isn't currently doable -- object.slt.val is a pointer, not a pointer to a pointer
-;;;   there is the symbol's extra slot, but it is global.  I wonder how much slower s7 would be
-;;;   with a pointer to a pointer here -- are there any other places this would be useful?
-;;;   even with this, the entire accessor chain is not triggered.
-;;; so, use with-accessors and reactive-set! for complex cases
-
-(define unique-reactive-let-name ; the alternative is (apply define-bacro ...) with a top-level gensym
-  (let ((name #f))
-    (lambda ()
-      (if (gensym? name)
-	  name
-	  (set! name (gensym "v"))))))
-
-(define-bacro (reactive-let vars . body)
-  (with-let (inlet 'vars vars 'body body 'e (outlet (curlet)))
-    (let ((bindings ())
-	  (accessors ())
-	  (setters ())
-	  (gs (gensym))
-	  (v (unique-reactive-let-name)))
-
-      (define (rlet-symbol sym)
-	(symbol "{" (symbol->string sym) "}-rlet"))
-
-      (for-each 
-       (lambda (bd)
-	 (let ((syms (gather-symbols (cadr bd) e () ())))
-	   (for-each 
-	    (lambda (sym)
-	      (let ((fname (gensym (symbol->string sym))))
-		(set! bindings (cons `(,fname (lambda (,sym) ,(copy (cadr bd)))) bindings))
-		(if (not (memq sym setters))
-		    (set! setters (cons sym setters)))
-		(let ((prev (assq sym accessors)))
-		  (if prev
-		      (set-cdr! prev (cons (list 'set! (car bd) (list fname v)) (cdr prev)))
-		      (set! accessors (cons (list sym (list 'set! (car bd) (list fname v))) accessors))))))
-		      ;; (append `((set! ,(car bd) (,fname ,v))) (cdr prev)))
-		      ;; (set! accessors (cons (cons sym `((set! ,(car bd) (,fname ,v)))) accessors))))))
-	    syms)
-	   (set! bindings (cons bd bindings))))
-       vars)
-
-      (let ((bsyms (gather-symbols body e () ()))
-	    (nsyms ()))
-	(for-each (lambda (s)
-		    (if (and (with-let (sublet e (quote gs) s) 
-			       (symbol-setter gs))
-			     (not (assq s bindings)))
-			(if (not (memq s setters))
-			    (begin
-			      (set! setters (cons s setters))
-			      (set! nsyms (cons (cons s (cdr (procedure-source (with-let (sublet e (quote gs) s) 
-										 (symbol-setter gs)))))
-						nsyms)))
-			    (let ((prev (assq s accessors)))
-			      (if prev ; merge the two functions
-				  (set-cdr! prev (append (cdddr (procedure-source (with-let (sublet e (quote gs) s) 
-										    (symbol-setter gs))))
-							 (cdr prev))))))))
-		  bsyms)
-
-	`(let ,(map (lambda (sym)
-		      (values
-		       `(,(rlet-symbol sym) (lambda (,v) (set! ,sym ,v)))
-		       `(,sym ,sym)))
-		    setters)
-	   (let ,(reverse bindings) 
-	     ,@(map (lambda (sa)
-		      (if (assq (car sa) bindings)
-			  (values)
-			  `(set! (symbol-setter ',(car sa))
-				 (lambda (,(gensym) ,v)
-				   (,(rlet-symbol (car sa)) ,v)
-				   ,@(cdr sa)
-				   ,v))))
-		    accessors)
-	     ,@(map (lambda (ns)
-		      `(set! (symbol-setter ',(car ns))
-			     (apply lambda ',(cdr ns))))
-		    nsyms)
-	     ,@body))))))
-
-
-(define-macro (reactive-let* vars . body)
-  (let add-let ((v vars))
-    (if (pair? v)
-	`(reactive-let ((,(caar v) ,(cadar v)))
-	   ,(add-let (cdr v)))
-	(cons 'begin body))))
-
-;; reactive-letrec is not useful: lambdas already react and anything else is an error (use of #<undefined>)
-
-(define-macro (reactive-lambda* args . body)
-  `(let ((f (lambda* ,args ,@body))
-	 (e (curlet)))
-     (unless (eq? e (rootlet))
-
-       (define (one-access s1 v)
-	 (let* ((syms (map car e))
-		(sa's (map (lambda (s) (symbol-setter s e)) syms)))
-	   (dynamic-wind
-	       (lambda () (for-each (lambda (s) (if (not (eq? s s1)) (set! (symbol-setter s e) #f))) syms))
-	       (lambda () (f s1 v))
-	       (lambda () (for-each (lambda (s a) (set! (symbol-setter s e) a)) syms sa's)))))
-
-       (for-each (lambda (s) (set! (symbol-setter s e) one-access)) (map car e)))
-     f))
-
-
-(define-macro (with-accessors vars . body)
-  `(let ((accessors ()))
-     (dynamic-wind
-	 (lambda ()
-	   (set! accessors (map symbol-setter ',vars)))
-	 (lambda ()
-	   ,@body)
-	 (lambda ()
-	   (for-each
-	    (lambda (var accessor)
-	      (set! (symbol-setter var) accessor))
-	    ',vars accessors)))))
-
-;; (let ((a 1) (b 2)) (with-accessors (a b) (let ((c 3)) (reactive-set! c (+ (* 2 a) (* 3 b))) (set! a 4) c)))
-
-#|
-(let ((x 0.0)) (reactive-let ((y (sin x))) (set! x 1.0) y)) -- so "lifting" comes for free?
-
-(map (lambda (s) (symbol-setter (car s) e)) e)
-
-(let ((a 1))
-  (reactive-let ((b (+ a 1))
-		 (c (* a 2)))
-		(set! a 3)
-		(+ c b)))
-
-(let ((a 1) 
-      (d 2))
-  (reactive-let ((b (+ a d))
-		 (c (* a d))
-                 (d 0))
-		(set! a 3)
-		(+ b c)))
-
-(let ((a 1))
-  (reactive-let* ((b (+ a 1))
-		  (c (* b 2)))
-    (set! a 3)
-    (+ c b)))
-
-(let ((a 1))
-  (reactive-let* ((b (+ a 1)))
-    (set! a 3) 
-    b))
-
-(define rl (let ((a 1)
-	         (b 2)
-		 (c 3))
-	     (reactive-lambda* (s v)
-	       (format *stderr* "~S changed: ~S~%" s v))))
-
-;; constant env:
-;; (define e (let ((a 1) (b 2)) (reactive-lambda* (s v) ((curlet) s)) (curlet)))
-|#
-
-;;; what about (reactive-vector (v 0)) -- can we watch some other vector's contents?
-;;;   if v were a mock-vector, we could use the same vector-set! stuff as now but with any name (how to distinguish?)
-;;;   we can distinguish because this is happening at run-time where (v 0) has an ascertainable meaning
-;;; how would reactive-hash-table work? (hash 'a (+ b 1)) and update 'a's value whenever b changes?
-;;;   reactive-string? (reactive-string #\a c (integer->char a) (str 0) (_ 0))
-;;;   reactive-eval reactive-if(expr changes)--reactive-assert for example
-
+;;; 28-Jul-18 I've started to rewrite the reactive* code: reactive.scm.
+;;; ----------------
 
 #|
 ;; this tests a bacro for independence of any runtime names
@@ -1664,8 +1337,6 @@ Unlike full-find-if, safe-find-if can handle any circularity in the sequences.")
 	    (subset args () 0)))))))
 |#
 
-
-
 ;;; ----------------
 
 (define-macro (catch* clauses . error) 
@@ -1682,7 +1353,7 @@ Unlike full-find-if, safe-find-if can handle any circularity in the sequences.")
 	(error 'out-of-range "end: ~A should be greater than start: ~A" end start))
 
     (cond ((vector? obj) 
-	   (make-shared-vector obj (list new-len) start))
+	   (subvector obj (list new-len) start))
 
           ((string? obj)
            (if (integer? end)
@@ -1707,11 +1378,13 @@ Unlike full-find-if, safe-find-if can handle any circularity in the sequences.")
 (define (sequence->string val)
   (let ((ctrl-str (cond ((or (not (sequence? val)) 
 			     (empty? val))    "~S")
+			((int-vector? val)    "#i(~{~D~| ~})")
+			((byte-vector? val)   "#u(~{~D~| ~})")
+			((float-vector? val)  "#r(~{~A~| ~})")
 			((vector? val)        "#(~{~A~| ~})")
 			((let? val)           "(inlet ~{'~A~| ~})")
 			((hash-table? val)    "(hash-table ~{'~A~| ~})")
 			((not (string? val))  "(~{~A~| ~})")
-			((byte-vector? val)   "#u8(~{~D~| ~})")
 			(else                 "\"~{~A~|~}\""))))
     (format #f ctrl-str val)))
 
@@ -1774,10 +1447,10 @@ Unlike full-find-if, safe-find-if can handle any circularity in the sequences.")
       (vlp (gensym)))
   
   ;; local symbol access -- this does not affect any other uses of these symbols
-  (set! (symbol-setter '*display-spacing* (curlet))
+  (set! (setter '*display-spacing* (curlet))
 	(lambda (s v) (if (and (integer? v) (not (negative? v))) v *display-spacing*)))
   
-  (set! (symbol-setter '*display-print-length* (curlet))
+  (set! (setter '*display-print-length* (curlet))
 	(lambda (s v) (if (and (integer? v) (not (negative? v))) v *display-print-length*)))
   
   ;; export *display* -- just a convenience
@@ -2049,6 +1722,7 @@ Unlike full-find-if, safe-find-if can handle any circularity in the sequences.")
 		 `((lambda* ,(cons ',e ',arg-names)                                ; prepend added env arg because there might be a rest arg
 		     (let ((,',result '?))
 		       (dynamic-wind
+			   (lambda () #f)
 			   (lambda ()                                              ; when function called, show args and caller
 			     (with-let (funclet Display)                           ; indent
 			       (prepend-spaces)
@@ -2059,8 +1733,7 @@ Unlike full-find-if, safe-find-if can handle any circularity in the sequences.")
 			     (let ((caller (eval '__func__ ,',e)))                 ; show caller 
 			       (if (not (eq? caller #<undefined>))
 				   (format (Display-port) " ;called from ~A" caller)))
-			     (newline (Display-port)))
-			   (lambda ()                                              ; the original function body
+			     (newline (Display-port))
 			     (set! ,',result ,',body))                             ;   but annotated by proc-walk
 			   (lambda ()                                              ; at the end, show the result
 			     (with-let (funclet Display)
@@ -2107,11 +1780,9 @@ Unlike full-find-if, safe-find-if can handle any circularity in the sequences.")
    :stack-size                    (*s7* 'stack-size)
    :stacktrace-defaults           (*s7* 'stacktrace-defaults)
    :max-stack-size                (*s7* 'max-stack-size)
-   :symbol-table-locked?          (*s7* 'symbol-table-locked?)
    :autoloading?                  (*s7* 'autoloading?)
    :undefined-identifier-warnings (*s7* 'undefined-identifier-warnings)
-   :catches                       (*s7* 'catches)
-   :exits                         (*s7* 'exits)))
+   :catches                       (*s7* 'catches)))
 
 
 
@@ -2198,13 +1869,13 @@ Unlike full-find-if, safe-find-if can handle any circularity in the sequences.")
 	   (for-each
 	    (lambda (op) 
 	      (set! (ht op) #t))
-	    '(symbol? gensym? keyword? let? openlet? iterator? macro? c-pointer? c-object? immutable? constant?
+	    '(symbol? gensym? keyword? let? openlet? iterator? macro? c-pointer? c-object? c-object-type immutable? constant?
 	      input-port? output-port? eof-object? integer? number? real? complex? rational? random-state? 
 	      char? string? list? pair? vector? float-vector? int-vector? byte-vector? hash-table? 
 	      continuation? procedure? dilambda? boolean? float? proper-list? sequence? null? gensym 
 	      symbol->string string->keyword symbol->keyword byte-vector-ref byte-vector-set!
 	      inlet sublet coverlet openlet let-ref let-set! make-iterator iterate iterator-sequence
-	      iterator-at-end? provided? provide c-pointer port-line-number port-filename 
+	      iterator-at-end? provided? provide c-pointer c-pointer-type c-pointer-info port-line-number port-filename 
 	      pair-line-number pair-filename port-closed? let->list char-ready? flush-output-port 
 	      open-input-string open-output-string get-output-string quasiquote call-with-values multiple-value-bind
 	      newline write display read-char peek-char write-char write-string read-byte write-byte 
@@ -2227,7 +1898,7 @@ Unlike full-find-if, safe-find-if can handle any circularity in the sequences.")
 	      cdadar cddaar cdaddr cddddr cddadr cdddar assoc member list list-ref list-set! list-tail 
 	      make-list length copy fill! reverse reverse! sort! append assq assv memq memv vector-append 
 	      list->vector vector-fill! vector-length vector->list vector-ref vector-set! vector-dimensions 
-	      make-vector make-shared-vector vector float-vector make-float-vector float-vector-set! 
+	      make-vector subvector vector float-vector make-float-vector float-vector-set! 
 	      float-vector-ref int-vector make-int-vector int-vector-set! int-vector-ref string->byte-vector 
 	      byte-vector make-byte-vector hash-table hash-table* make-hash-table hash-table-ref 
 	      hash-table-set! hash-table-entries cyclic-sequences call/cc call-with-current-continuation 
@@ -2245,7 +1916,7 @@ Unlike full-find-if, safe-find-if can handle any circularity in the sequences.")
 	   ht))
 	(baddies (list #_eval #_eval-string #_load #_autoload #_define-constant #_define-expansion #_require
 		       #_string->symbol #_symbol->value #_symbol->dynamic-value #_symbol-table #_symbol #_keyword->symbol 
-		       #_defined? #_symbol-setter
+		       #_defined? 
 		       #_call/cc #_gc #_read #_immutable!
 		       #_open-output-file #_call-with-output-file #_with-output-to-file
 		       #_open-input-file #_call-with-input-file #_with-input-from-file
@@ -2266,7 +1937,7 @@ Unlike full-find-if, safe-find-if can handle any circularity in the sequences.")
 		  (cond ((symbol? tree)
 			 (let ((val (symbol->value tree)))
 			   ;; don't accept any symbol with an accessor
-			   (if (or (symbol-setter tree)
+			   (if (or (setter tree)
 				   (memq tree '(*s7* unquote abort))
 				   (let? val))  ; not sure about this
 			       (quit #f))

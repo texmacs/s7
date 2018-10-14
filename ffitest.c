@@ -84,6 +84,7 @@ static s7_pointer dax_to_string(s7_scheme *sc, s7_pointer args)
   data_str_len = strlen(data_str);
   str = (char *)calloc(data_str_len + 32, sizeof(char));
   snprintf(str, data_str_len + 32, "#<dax %.3f %s>", o->x, data_str);
+  free(data_str);
   result = s7_make_string(sc, str);
   free(str);
   return(result);
@@ -231,8 +232,11 @@ static s7_pointer multivector_ref(s7_scheme *sc, s7_pointer vector, int indices,
 	  s7_int *offsets, *dimensions;
 
 	  elements = s7_vector_elements(vector);
-	  dimensions = s7_vector_dimensions(vector);
-	  offsets = s7_vector_offsets(vector);
+
+	  dimensions = (s7_int *)malloc(ndims * sizeof(s7_int));
+	  offsets = (s7_int *)malloc(ndims * sizeof(s7_int));
+	  s7_vector_dimensions(vector, dimensions, ndims);
+	  s7_vector_offsets(vector, offsets, ndims);
 
 	  for (i = 0; i < indices; i++)
 	    {
@@ -242,6 +246,8 @@ static s7_pointer multivector_ref(s7_scheme *sc, s7_pointer vector, int indices,
 		  (ind >= dimensions[i]))
 		{
 		  va_end(ap);
+		  free(dimensions);
+		  free(offsets);
 		  return(s7_out_of_range_error(sc, 
                                                "multivector_ref", i, 
                                                s7_make_integer(sc, ind), 
@@ -250,6 +256,8 @@ static s7_pointer multivector_ref(s7_scheme *sc, s7_pointer vector, int indices,
 	      index += (ind * offsets[i]);
 	    }
 	  va_end(ap);
+	  free(dimensions);
+	  free(offsets);
 	  return(elements[index]);
 	}
     }
@@ -807,15 +815,18 @@ int main(int argc, char **argv)
   s7_set_default_random_state(sc, 1234, 5678);
   s7_random(sc, NULL);
   s7_stacktrace(sc);
+
   if (s7_list(sc, 0) != s7_nil(sc))
     fprintf(stderr, "s7_list 0 is not ()\n");
+  if (s7_list_nl(sc, 0, NULL) != s7_nil(sc))
+    fprintf(stderr, "s7_list_nl 0 is not ()\n");
 
   p = s7_make_vector(sc, 12);
   gc_loc = s7_gc_protect(sc, p);
 
   if (!s7_is_vector(p))
     {fprintf(stderr, "%d: %s is not a vector?\n", __LINE__, s1 = TO_STR(p)); free(s1);}
-  if (s7_type_of(p) != s7_make_symbol(sc, "vector?"))
+  if (s7_type_of(sc, p) != s7_make_symbol(sc, "vector?"))
     fprintf(stderr, "type-of(vector) confused?\n");
 
   if (s7_vector_rank(p) != 1)
@@ -899,6 +910,15 @@ int main(int argc, char **argv)
   
   s7_gc_unprotect_at(sc, gc_loc);
 
+  p = s7_list_nl(sc, 3, TO_S7_INT(1), TO_S7_INT(2), TO_S7_INT(3), NULL);
+  gc_loc = s7_gc_protect(sc, p);
+  if (!s7_is_list(sc, p))
+    {fprintf(stderr, "%d: %s is not a list?\n", __LINE__, s1 = TO_STR(p)); free(s1);}
+  if (s7_list_length(sc, p) != 3)
+    {fprintf(stderr, "%d: (length %s) is not 3?\n", __LINE__, s1 = TO_STR(p)); free(s1);}
+  if (s7_integer(s7_list_ref(sc, p, 1)) != 2)
+    {fprintf(stderr, "%d: (%s 1) is not 2?\n", __LINE__, s1 = TO_STR(p)); free(s1);}
+  s7_gc_unprotect_at(sc, gc_loc);
 
   {
     s7_pointer c1, c2, c3, c12, c23, c123, c1234, c1d2, c2d3, c3d4, c12d3, c23d4, c123d4, c1234d5;
@@ -1044,35 +1064,8 @@ int main(int argc, char **argv)
     p = s7_eval(sc, c1234, s7_sublet(sc, s7_rootlet(sc), s7_nil(sc)));
     if (s7_integer(p) != 9)
       {fprintf(stderr, "%d: (eval '(+ 2 3 4)) is %s?\n", __LINE__, s1 = TO_STR(p)); free(s1);}
-    p = s7_eval_form(sc, c1234, s7_sublet(sc, s7_rootlet(sc), s7_nil(sc)));
-    if (s7_integer(p) != 9)
-      {fprintf(stderr, "%d: (eval(form) '(+ 2 3 4)) is %s?\n", __LINE__, s1 = TO_STR(p)); free(s1);}
-    
     s7_gc_on(sc, true);
   }
-
-#if 0
-  p = s7_make_ulong(sc, 123);
-  gc_loc = s7_gc_protect(sc, p);
-
-  if (!s7_is_ulong(p))
-    {fprintf(stderr, "%d: %s is not a ulong?\n", __LINE__, s1 = TO_STR(p)); free(s1);}
-  
-  if (s7_ulong(p) != (unsigned long)123)
-    {fprintf(stderr, "%d: %s is not 123?\n", __LINE__, s1 = TO_STR(p)); free(s1);}
-  s7_gc_unprotect_at(sc, gc_loc);
-
-
-  p = s7_make_ulong_long(sc, 123);
-  gc_loc = s7_gc_protect(sc, p);
-
-  if (!s7_is_ulong_long(p))
-    {fprintf(stderr, "%d: %s is not a ulong_long?\n", __LINE__, s1 = TO_STR(p)); free(s1);}
-  
-  if (s7_ulong_long(p) != (unsigned long long)123)
-    {fprintf(stderr, "%d: %s is not 123?\n", __LINE__, s1 = TO_STR(p)); free(s1);}
-  s7_gc_unprotect_at(sc, gc_loc);
-#endif
 
   s7_for_each_symbol_name(sc, symbol_func, NULL);
   s7_for_each_symbol(sc, symbol_func_1, NULL);
@@ -1095,7 +1088,7 @@ int main(int argc, char **argv)
   p = s7_current_input_port(sc);
   if (!s7_is_input_port(sc, p))
     {fprintf(stderr, "%d: %s is not an input port?\n", __LINE__, s1 = TO_STR(p)); free(s1);}
-  s7_port_line_number(p);
+  s7_port_line_number(sc, p);
   s7_add_to_history(sc, s7_nil(sc));
   s7_history(sc);
 
@@ -1164,7 +1157,7 @@ int main(int argc, char **argv)
   s7_define_variable(sc, "dax-data", 
                      s7_dilambda(sc, "dax-data", dax_data, 1, 0, set_dax_data, 2, 0, "dax data field"));
 
-  if (!s7_is_procedure_with_setter(s7_name_to_value(sc, "dax-x")))
+  if (!s7_is_dilambda(s7_name_to_value(sc, "dax-x")))
     {fprintf(stderr, "%d: dax-x is not a pws?\n", __LINE__);}
 
   p = make_dax(sc, s7_cons(sc, s7_make_real(sc, 1.0), s7_cons(sc, TO_S7_INT(2), s7_nil(sc))));
@@ -1247,7 +1240,7 @@ int main(int argc, char **argv)
   p1 = s7_apply_function(sc, 
 	s7_name_to_value(sc, "mac-plus"),
 	s7_list(sc, 2, s7_make_integer(sc, 3), s7_make_integer(sc, 4)));
-  p = s7_eval_form(sc, p1, s7_rootlet(sc));
+  p = s7_eval(sc, p1, s7_rootlet(sc));
   if ((!s7_is_integer(p)) ||
       (s7_integer(p) != 7))
     {char *s2; fprintf(stderr, "%d: %s -> %s is not 7?\n", __LINE__, s1 = TO_STR(p1), s2 = TO_STR(p)); free(s1); free(s2);}
@@ -1300,9 +1293,15 @@ int main(int argc, char **argv)
   {
     s7_int *dims, *offs;
     s7_pointer *els;
-    dims = s7_vector_dimensions(p1);
-    offs = s7_vector_offsets(p1);
+    s7_int ndims;
+
+    ndims = s7_vector_rank(p1);
+    dims = (s7_int *)malloc(ndims * sizeof(s7_int));
+    offs = (s7_int *)malloc(ndims * sizeof(s7_int));
+    s7_vector_dimensions(p1, dims, ndims);
+    s7_vector_offsets(p1, offs, ndims);
     els = s7_vector_elements(p1);
+
     if (dims[0] != 2) fprintf(stderr, "%d: dims[0]: %" print_s7_int "?\n", __LINE__, dims[0]);
     if (dims[1] != 3) fprintf(stderr, "%d: dims[1]: %" print_s7_int "?\n", __LINE__, dims[1]);
     if (dims[2] != 4) fprintf(stderr, "%d: dims[2]: %" print_s7_int "?\n", __LINE__, dims[2]);
@@ -1310,6 +1309,9 @@ int main(int argc, char **argv)
     if (offs[1] != 4) fprintf(stderr, "%d: offs[1]: %" print_s7_int "?\n", __LINE__, offs[1]);
     if (s7_integer(p = els[12 + 4 + 1]) != 32)
       {fprintf(stderr, "%d: %s is not 32?\n", __LINE__, s1 = TO_STR(p)); free(s1);}
+
+    free(dims);
+    free(offs);
   }
 
   s7_vector_fill(sc, p1, s7_t(sc));
@@ -1825,7 +1827,7 @@ int main(int argc, char **argv)
 
   s7_define_function(sc, "notify-C", scheme_set_notification, 2, 0, false, "called if notified-var is set!");
   s7_define_variable(sc, "notified-var", s7_make_integer(sc, 0));
-  s7_symbol_set_setter(sc, s7_make_symbol(sc, "notified-var"), s7_name_to_value(sc, "notify-C"));
+  s7_set_setter(sc, s7_make_symbol(sc, "notified-var"), s7_name_to_value(sc, "notify-C"));
   s7_eval_c_string(sc, "(set! notified-var 32)");
   p = s7_name_to_value(sc, "notified-var");
   if (s7_integer(p) != 32)

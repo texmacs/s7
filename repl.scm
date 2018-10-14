@@ -901,9 +901,13 @@
 				    (let ((form (with-input-from-string cur-line #_read)))    ; not libc's read
 				      (newline *stderr*)
 				      (let ((val ((lambda args
-						    (if (pair? (cdr args))
-							(cons 'values args)
-							(car args)))
+						    (if (or (null? args)   ; try to trap (values) -> #<unspecified>
+							    (and (unspecified? (car args))
+								 (null? (cdr args))))
+							#<unspecified>
+							(if (pair? (cdr args))
+							    (cons 'values args)
+							    (car args))))
 						  (eval form (*repl* 'top-level-let)))))
 					(eval `(define ,(string->symbol (format #f "<~D>" (+ (length histtop) 1))) ',val) (rootlet))
 					(if unbound-case
@@ -1267,9 +1271,17 @@
 
 	    (curlet))))))
       
-      (define (save-repl) 
-	(call-with-output-file "save.repl" 
+      (define* (save-repl (file "save.repl"))
+	;; ((*repl* 'save-repl))
+	(call-with-output-file file
 	  (lambda (p) 
+	    (format p ";;; save-repl ~A~%~%" 
+		    (with-let (sublet *libc*)
+		      (let ((timestr (make-string 128))) 
+			(let ((len (strftime timestr 128 "%a %d-%b-%Y %H:%M:%S %Z"
+					     (localtime 
+					      (time.make (time (c-pointer 0 'time_t*)))))))
+			  (substring timestr 0 len)))))
 	    (format p "(for-each~%~NC~
                          (lambda (f)~%~NC~
                            (if (not (provided? f))~%~NC~
@@ -1280,7 +1292,10 @@
 	    (format p "(with-let (*repl* 'repl-let)~%")
 	    (((*repl* 'repl-let) 'write-history) p 2)
 	    (format p ")~%~%")
-	    (format p "~W" (*repl* 'top-level-let)))))
+	    (for-each (lambda (var)
+			(unless (eq? (car var) 'exit)
+			  (format p "(define ~S ~W)~%" (car var) (cdr var))))
+		      (*repl* 'top-level-let)))))
       
       (define (restore-repl) 
 	(set! (*repl* 'top-level-let) (load "save.repl")))  
@@ -1322,7 +1337,7 @@
 		(let ((timestr (make-string 128))) 
 		  (let ((len (strftime timestr 128 "%a %d-%b-%Y %H:%M:%S %Z"
 				       (localtime 
-					(time.make (time (c-pointer 0)))))))
+					(time.make (time (c-pointer 0 'time_t*)))))))
 		    (substring timestr 0 len)))))))
     (openlet (inlet 'object->string pd 'let-ref-fallback pd))))
 |#
@@ -1505,7 +1520,7 @@
 
 ;;; to display a variable's value as s7 runs using the repl help window:
 ;;;    (define xyz 1) ; some variable...
-;;;    (set! (symbol-setter 'xyz) (lambda (sym val) (set! (*repl* 'helpers) (list (lambda (c) (format #f "xyz: ~S" val)))) val))
+;;;    (set! (setter 'xyz) (lambda (sym val) (set! (*repl* 'helpers) (list (lambda (c) (format #f "xyz: ~S" val)))) val))
 
 
 ;;; --------------------------------------------------------------------------------

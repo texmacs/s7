@@ -46,6 +46,9 @@
 ;;   table of functions that are simple (no side effects) is (*lint* 'no-side-effect-functions)
 ;;   see snd-lint.scm.
 
+(when (< (*s7* 'heap-size) (* 4 1024000))
+  (set! (*s7* 'heap-size) (* 4 1024000)))
+
 
 ;;; --------------------------------------------------------------------------------
 
@@ -99,7 +102,8 @@
 	      begin boolean? byte-vector byte-vector-ref byte-vector?
 	      caaaar caaadr caaar caadar caaddr caadr caar cadaar cadadr cadar caddar cadddr caddr cadr
 	      call-with-input-string call-with-input-file
-	      c-pointer c-pointer? c-object? call-with-exit car case catch cdaaar cdaadr cdaar cdadar cdaddr cdadr cdar cddaar cddadr
+	      c-pointer c-pointer? c-object? c-object-type call-with-exit car case catch 
+	      cdaaar cdaadr cdaar cdadar cdaddr cdadr cdar cddaar cddadr
 	      cddar cdddar cddddr cdddr cddr cdr ceiling char->integer char-alphabetic? char-ci<=?
 	      char-ci<? char-ci=? char-ci>=? char-ci>? char-downcase char-lower-case? char-numeric? 
 	      char-position char-ready? char-upcase char-upper-case? char-whitespace? char<=? char<?
@@ -117,7 +121,7 @@
 	      lambda lambda* lcm let->list length let let* let-ref let? letrec letrec* list list->string list->vector list-ref
 	      list-tail list? log logand logbit? logior lognot logxor
 	      macro? magnitude make-byte-vector make-float-vector make-int-vector make-hash-table make-hook make-iterator make-list make-polar
-	      make-rectangular make-shared-vector make-string make-vector map max member memq memv min modulo morally-equal?
+	      make-rectangular subvector make-string make-vector map max member memq memv min modulo morally-equal?
 	      nan? negative? not null? number->string number? numerator
 	      object->let object->string odd? openlet? or outlet output-port? owlet
 	      pair-line-number pair-filename pair? port-closed? port-filename port-line-number positive? documentation
@@ -127,7 +131,8 @@
 	      sequence? sin sinh square sqrt stacktrace string string->list string->number string->symbol string->keyword string-append 
 	      string-ci<=? string-ci<? string-ci=? string-ci>=? string-ci>? string-downcase string-length
 	      string-position string-ref string-upcase string<=? string<? string=? string>=? string>? string?
-	      sublet substring symbol symbol->dynamic-value symbol->keyword symbol->string symbol->value symbol? syntax?
+	      sublet substring subvector? subvector-position subvector-vector
+	      symbol symbol->dynamic-value symbol->keyword symbol->string symbol->value symbol? syntax?
 	      tan tanh tree-leaves tree-memq tree-set-memq tree-count tree-cyclic? truncate type-of
 	      unless unspecified? undefined?
 	      values vector vector-append vector->list vector-dimensions vector-length vector-ref vector?
@@ -142,11 +147,11 @@
 			      (for-each
 			       (lambda (op) 
 				 (set! (ht op) #t))
-			       '(symbol? gensym? keyword? let? openlet? iterator? macro? c-pointer? c-object? constant?
+			       '(symbol? gensym? keyword? let? openlet? iterator? macro? c-pointer? c-object? c-object-type constant? subvector?
 			         input-port? output-port? eof-object? integer? number? real? complex? rational? random-state? 
 			         char? string? list? pair? vector? float-vector? int-vector? byte-vector? hash-table? 
 			         continuation? procedure? dilambda? boolean? float? proper-list? sequence? null? gensym 
-			         symbol->string string->symbol symbol symbol->value symbol->dynamic-value symbol-setter 
+			         symbol->string string->symbol symbol symbol->value symbol->dynamic-value 
 			         string->keyword symbol->keyword keyword->symbol outlet rootlet curlet unlet sublet varlet 
 			         cutlet inlet owlet coverlet openlet let-ref let-set! make-iterator iterate iterator-sequence
 			         iterator-at-end? provided? provide defined? c-pointer port-line-number port-filename 
@@ -173,7 +178,7 @@
 			         cdadar cddaar cdaddr cddddr cddadr cdddar assoc member list list-ref list-set! list-tail 
 			         make-list length copy fill! reverse reverse! sort! append assq assv memq memv vector-append 
 			         list->vector vector-fill! vector-length vector->list vector-ref vector-set! vector-dimensions 
-			         make-vector make-shared-vector vector float-vector make-float-vector float-vector-set! 
+			         make-vector subvector vector float-vector make-float-vector float-vector-set! 
 			         float-vector-ref int-vector make-int-vector int-vector-set! int-vector-ref string->byte-vector 
 			         byte-vector make-byte-vector hash-table hash-table* make-hash-table hash-table-ref 
 			         hash-table-set! hash-table-entries cyclic-sequences call/cc call-with-current-continuation 
@@ -183,7 +188,8 @@
 			         exit dilambda make-hook hook-functions stacktrace tree-leaves tree-memq object->let
 				 getenv directory? file-exists? type-of immutable! immutable? byte-vector-set! syntax?
 				 list-values apply-values unquote set-current-output-port unspecified? undefined? byte-vector-ref
-				 set-current-input-port set-current-error-port directory->list system tree-count tree-set-memq tree-cyclic?))
+				 set-current-input-port set-current-error-port directory->list system subvector-position subvector-offset
+				 tree-count tree-set-memq tree-cyclic?))
 			      ht))
 
 	(makers (let ((h (make-hash-table)))
@@ -193,7 +199,7 @@
 		   '(gensym sublet inlet make-iterator let->list random-state random-state->list number->string object->let
 		     make-string string string-copy copy list->string string->list string-append substring object->string
 		     format cons list make-list reverse append vector-append list->vector vector->list make-vector
-		     make-shared-vector vector make-float-vector float-vector make-int-vector int-vector byte-vector
+		     subvector vector make-float-vector float-vector make-int-vector int-vector byte-vector
 		     hash-table hash-table* make-hash-table make-hook list-values append gentemp)) ; gentemp for other schemes
 		  h))
 
@@ -231,23 +237,28 @@
 		 (for-each
 		  (lambda (op)
 		    (set! (h op) #t))
-		  '(symbol? integer? rational? real? number? complex? float? keyword? gensym? byte-vector? string? list? sequence?
+		  '(symbol? byte? integer? rational? real? number? complex? float? keyword? gensym? byte-vector? string? list? sequence?
 		    char? boolean? float-vector? int-vector? vector? let? hash-table? input-port? null? pair? proper-list?
 		    output-port? iterator? continuation? dilambda? procedure? macro? random-state? eof-object? c-pointer?
-		    unspecified? immutable? constant? syntax? undefined? tree-cyclic? iterator-at-end? openlet?))
+		    unspecified? immutable? constant? syntax? undefined? tree-cyclic? iterator-at-end? openlet? subvector?))
 		 h))
 
 	(booleans (let ((h (make-hash-table)))
 		  (for-each
 		   (lambda (op)
 		     (set! (h op) #t))
-		   '(symbol? integer? rational? real? number? complex? float? keyword? gensym? byte-vector? string? list? sequence?
+		   '(symbol? byte? integer? rational? real? number? complex? float? keyword? gensym? byte-vector? string? list? sequence?
 		     char? boolean? float-vector? int-vector? vector? let? hash-table? input-port? null? pair? proper-list?
 		     output-port? iterator? continuation? dilambda? procedure? macro? random-state? eof-object? c-pointer?
 		     unspecified? exact? inexact? defined? provided? even? odd? char-whitespace? char-numeric? char-alphabetic?
 		     negative? positive? zero? syntax? undefined? tree-cyclic? not openlet? ; immutable? constant?
-		     infinite? nan? char-upper-case? char-lower-case? directory? file-exists? iterator-at-end?))
+		     infinite? nan? char-upper-case? char-lower-case? directory? file-exists? iterator-at-end? subvector?))
 		  h))
+
+	(setters '(symbol? syntax? gensym? keyword? let? openlet? iterator? macro? c-pointer? input-port? output-port? eof-object?
+		   integer? byte? number? real? float? complex? rational? random-state? char? string? list? pair? vector? float-vector?
+		   int-vector? byte-vector? hash-table? continuation? procedure? dilambda? boolean? properd-list? sequence? null?
+		   undefined? unspecified? c-object? subvector? weak-hash-table?))
 
 	(notables (let ((h (make-hash-table)))
 		    (for-each
@@ -681,7 +692,7 @@
       (let ((+documentation+ "(copy-tree lst) returns a full copy of lst"))
 	(lambda (lis)
 	  (if (pair? lis)
-	      (copy lis :readable)
+	      (copy lis) ;:readable)
 	      lis))))
 
     (define (proper-tree? tree)
@@ -918,9 +929,9 @@
 				     (set! (ht op) #t))
 				   '(* + - / < <= = > >= 
 				     abs acos acosh and angle append aritable? arity ash asin asinh assoc assq assv atan atanh 
-				     begin boolean? byte-vector byte-vector?
+				     begin boolean? byte? byte-vector byte-vector?
 				     caaaar caaadr caaar caadar caaddr caadr caar cadaar cadadr cadar caddar cadddr caddr cadr
-				     c-pointer c-pointer? c-object? car case cdaaar cdaadr cdaar cdadar cdaddr cdadr cdar cddaar cddadr
+				     c-pointer c-pointer? c-object? c-object-type car case cdaaar cdaadr cdaar cdadar cdaddr cdadr cdar cddaar cddadr
 				     cddar cdddar cddddr cdddr cddr cdr ceiling char->integer char-alphabetic? char-ci<=?
 				     char-ci<? char-ci=? char-ci>=? char-ci>? char-downcase char-lower-case? char-numeric? 
 				     char-position char-upcase char-upper-case? char-whitespace? char<=? char<?
@@ -948,7 +959,7 @@
 				     sequence? sin sinh square sqrt string->number string->symbol 
 				     string-ci<=? string-ci<? string-ci=? string-ci>=? string-ci>? string-downcase string-length
 				     string-position string-ref string-upcase string<=? string<? string=? string>=? string>? string?
-				     substring symbol symbol->keyword symbol->string symbol? syntax?
+				     substring  subvector? symbol symbol->keyword symbol->string symbol? syntax?
 				     tan tanh tree-leaves tree-memq truncate
 				     unspecified? undefined?
 				     vector-dimensions vector-length vector-ref vector?
@@ -969,7 +980,7 @@
 	     (if fd
 		 (and (symbol? (var-ftype fd))
 		      (var-signature fd))
-		 (signature fnc)))))
+		 (signature (symbol->value fnc))))))
     
     (define (arg-arity fnc env)
       (and (symbol? fnc)
@@ -1843,8 +1854,6 @@
 	     (or (not (keyword? c))
 		 (cond ((assq c markers) => cdr)
 		       (else 'keyword?))))
-	    ((string?)
-	     (if (byte-vector? c) 'byte-vector? 'string?))
 	    ((procedure?)
 	     (if (dilambda? c) 'dilambda? 'procedure?))
 	    (else)))))
@@ -1880,23 +1889,23 @@
 		    (hash-table-ref booleans type1)
 		    (hash-table-ref booleans type2)))
 	  (case type1
-	    ((number? complex?)  (memq type2 '(float? real? rational? integer? number? complex? exact? inexact? zero? negative? positive? even? odd? infinite? nan?)))
-	    ((real?)             (memq type2 '(float? rational? integer? complex? number? exact? inexact? zero? negative? positive? even? odd? infinite? nan?)))
-	    ((zero?)             (memq type2 '(float? real? rational? integer? number? complex? exact? inexact? even?)))
+	    ((number? complex?)  (memq type2 '(float? real? rational? integer? number? complex? exact? inexact? zero? negative? positive? even? odd? infinite? nan? byte?)))
+	    ((real?)             (memq type2 '(float? rational? integer? complex? number? exact? inexact? zero? negative? positive? even? odd? infinite? nan? byte?)))
+	    ((zero?)             (memq type2 '(float? real? rational? integer? number? complex? exact? inexact? even? byte?)))
 	    ((negative? positive?) (memq type2 '(float? real? rational? integer? complex? number? exact? inexact? even? odd? infinite? nan?)))
 	    ((float?)            (memq type2 '(real? complex? number? inexact? zero? negative? positive? infinite? nan?)))
-	    ((rational?)         (memq type2 '(integer? real? complex? number? exact? zero? negative? positive? even? odd?)))
-	    ((integer?)          (memq type2 '(real? rational? complex? number? exact? even? odd? zero? negative? positive?)))
-	    ((odd? even?)        (memq type2 '(real? rational? complex? number? exact? integer? zero? negative? positive?)))
-	    ((exact?)            (memq type2 '(real? rational? complex? number? integer? zero? negative? positive? odd? even?)))
+	    ((rational?)         (memq type2 '(integer? real? complex? number? exact? zero? negative? positive? even? odd? byte?)))
+	    ((integer?)          (memq type2 '(real? rational? complex? number? exact? even? odd? zero? negative? positive? byte?)))
+	    ((odd? even?)        (memq type2 '(real? rational? complex? number? exact? integer? zero? negative? positive? byte?)))
+	    ((exact?)            (memq type2 '(real? rational? complex? number? integer? zero? negative? positive? odd? even? byte?)))
 	    ((inexact?)          (memq type2 '(real? number? complex? float? zero? negative? positive? infinite? nan?)))
 	    ((infinite? nan?)    (memq type2 '(real? number? complex? positive? negative? inexact? float?)))
-	    ((vector?)           (memq type2 '(float-vector? int-vector? sequence?)))
-	    ((float-vector? int-vector?) (memq type2 '(vector? sequence?)))
-	    ((sequence?)         (memq type2 '(list? pair? null? proper-list? vector? float-vector? int-vector? byte-vector? tree-cyclic? openlet?
+	    ((vector?)           (memq type2 '(float-vector? int-vector? sequence? subvector?)))
+	    ((float-vector? int-vector?) (memq type2 '(vector? sequence? subvector?)))
+	    ((sequence?)         (memq type2 '(list? pair? null? proper-list? vector? float-vector? int-vector? byte-vector? tree-cyclic? openlet? subvector?
 					       string? let? hash-table? iterator? procedure? directory? file-exists?))) ; procedure? for extended iterator
 	    ((symbol?)           (memq type2 '(gensym? keyword? defined? provided?)))
-	    ((string?)           (memq type2 '(byte-vector? sequence? directory? file-exists?)))
+	    ((string?)           (memq type2 '(sequence? directory? file-exists?)))
 	    ((not output-port?)  (eq? type2 'boolean?))
 	    ((boolean?)          (eq? type2 'not))
 	    ((keyword? gensym?)  (memq type2 '(symbol? defined? provided?)))
@@ -1913,7 +1922,7 @@
 	    ((let?)              (memq type2 '(defined? sequence? openlet?)))
 	    ((openlet?)          (memq type2 '(let? c-pointer? macro? procedure? sequence? defined? undefined?)))
 	    ((hash-table?)       (eq? type2 'sequence?))
-	    ((byte-vector?)      (memq type2 '(string? sequence?)))
+	    ((byte-vector?)      (eq? type2 'sequence?))
 	    ((char? char-whitespace? char-numeric? char-alphabetic? char-upper-case? char-lower-case?)
 	     (memq type2 '(char? char-whitespace? char-numeric? char-alphabetic? char-upper-case? char-lower-case?)))
 	    ((tree-cyclic?)      (memq type2 '(list? pair? sequence?)))
@@ -1939,16 +1948,16 @@
       (or (eq? type1 type2)
 	  (case type1
 	    ((integer?)         (memq type2 '(even? odd?)))
-	    ((rational?)        (memq type2 '(integer? exact? odd? even?)))
-	    ((exact?)           (memq type2 '(integer? rational?)))
-	    ((real?)            (memq type2 '(integer? rational? float? negative? positive? zero? odd? even?)))
-	    ((complex? number?) (memq type2 '(integer? rational? float? real? complex? number? negative? positive? zero? 
+	    ((rational?)        (memq type2 '(integer? byte? exact? odd? even?)))
+	    ((exact?)           (memq type2 '(integer? byte? rational?)))
+	    ((real?)            (memq type2 '(integer? byte? rational? float? negative? positive? zero? odd? even?)))
+	    ((complex? number?) (memq type2 '(integer? byte? rational? float? real? complex? number? negative? positive? zero? 
 					      even? odd? exact? inexact? nan? infinite?)))
 	    ((list?)            (memq type2 '(pair? null? proper-list?)))
 	    ((proper-list?)     (eq? type2 'null?))
-	    ((vector?)          (memq type2 '(float-vector? int-vector?)))
+	    ((vector?)          (memq type2 '(float-vector? int-vector? byte-vector?)))
 	    ((symbol?)          (memq type2 '(keyword? gensym?))) ; defined? provided? ??
-	    ((sequence?)        (memq type2 '(list? pair? null? proper-list? vector? float-vector? int-vector? byte-vector?
+	    ((sequence?)        (memq type2 '(list? pair? null? proper-list? vector?  subvector? float-vector? int-vector? byte-vector?
 					      string? let? hash-table? directory? file-exists?)))
 	    ((char?)            (memq type2 '(char-whitespace? char-numeric? char-alphabetic? char-upper-case? char-lower-case?)))
 	    (else #f))))
@@ -2115,7 +2124,7 @@
 				  (and (not (null? f))
 				       (side-effect-with-vars? f env vars)))
 			   (cdr form))
-		     (let ((sig (signature (car form))))       ; sig has func arg and it is not known safe
+		     (let ((sig (signature (symbol->value (car form))))) ; sig has func arg and it is not known safe
 		       (and (pair? sig)
 			    (memq 'procedure? (cdr sig))
 			    (call-with-exit
@@ -2177,7 +2186,7 @@
 		    vars))
 	(initialize-bad-var-names *report-bad-variable-names*)
 
-	(set! (symbol-setter '*report-bad-variable-names*) ; update these local variables if the global variable changes
+	(set! (setter '*report-bad-variable-names*) ; update these local variables if the global variable changes
 	      (lambda (sym val)
 		(when (just-symbols? val)
 		  (initialize-bad-var-names val))
@@ -2301,8 +2310,8 @@
 	((char?) '(eqv? char=?))
 	((integer? rational? real? number? complex? float?) '(eqv? =))
 	((symbol? keyword? boolean? null? procedure? syntax? macro? undefined? unspecified?) '(eq? eq?))
-	((string? byte-vector?) '(equal? string=?))
-	((pair? vector? float-vector? int-vector? hash-table?) '(equal? equal?))
+	((string?) '(equal? string=?))
+	((pair? vector? float-vector? int-vector?  subvector? hash-table?) '(equal? equal?))
 	((eof-object?) '(eq? eof-object?))
 	(else 
 	 (if (and (len=2? x)
@@ -2408,7 +2417,7 @@
       (and (proper-list? form) ;(not (infinite? (length form))) but when would a dotted list work?
 	   (catch #t
 	     (lambda ()
-	       (eval (copy form :readable)))
+	       (eval (copy form))); :readable)))
 	     (lambda args
 	       :checked-eval-error))))
     
@@ -2593,7 +2602,6 @@
 		   
 		   ((string?)
 		    (case type2
-		      ((byte-vector?) type2)
 		      ((string=?)
 		       (and (or (eq? (->lint-type (cadr arg2)) 'string?)
 				(eq? (->lint-type (caddr arg2)) 'string?))
@@ -2609,9 +2617,6 @@
 		   ((char-numeric? char-whitespace? char-alphabetic? char-upper-case? char-lower-case?) 
 		    (and (eq? type2 'char?) type1))
 		   
-		   ((byte-vector?) 
-		    (and (eq? type2 'string?) type1))
-
 		   ((directory?)
 		    (and (memq type2 '(string? file-exists?)) type1))
 
@@ -3051,7 +3056,7 @@
 			     (and (eq? type2 'char?)
 				  'contradictory))
 			    
-			    ((directory? file-exists? byte-vector?)
+			    ((directory? file-exists?)
 			     (and (memq type2 '(string? sequence?))
 				  'contradictory))
 
@@ -3092,10 +3097,8 @@
 			     (and (not (memq type2 '(constant? immutable?)))
 				  arg2))
 			    ((string?)
-			     (if (eq? type2 'byte-vector?)
-				 'true
-				 (and (not (memq type2 '(constant? immutable? sequence?)))
-				      arg2)))
+			     (and (not (memq type2 '(constant? immutable? sequence?)))
+				  arg2))
 			    ((sequence?)
 			     (and (memq type2 '(string? vector? proper-list? null? let? list? pair? float-vector? int-vector? byte-vector? hash-table? tree-cyclic?))
 				  'true))
@@ -6209,7 +6212,7 @@
       (if (just-code-constants? (cdr form))
 	  (catch #t
 	    (lambda ()
-	      (let ((val (eval (copy form :readable))))
+	      (let ((val (eval (copy form)))); :readable))))
 		(lint-format "perhaps ~A" caller (lists->string form val)))) ; (eq? #(0) #(0)) -> #f
 	    (lambda args
 	      #t))))
@@ -6274,7 +6277,7 @@
     
     (define special-case-functions
       (let ((special-case-table (make-hash-table)))
-	
+
 	(define (hash-special key value)
 	  (if (hash-table-ref special-case-table key)
 	      (format *stderr* "~A already has a value: ~A~%" key (hash-table-ref special-case-table key)))
@@ -7386,7 +7389,7 @@
 	  (for-each (lambda (f)
 		      (hash-special f sp-symbol?))
 		    '(symbol? rational? real? complex? float? keyword? gensym? byte-vector? proper-list? sequence? constant?
-		      char? boolean? float-vector? int-vector? vector? let? hash-table? input-port?
+		      char? boolean? float-vector? int-vector? vector? let? hash-table? input-port? byte?
 		      output-port? iterator? continuation? dilambda? procedure? macro? random-state? eof-object? c-pointer?
 		      syntax? undefined? unspecified?)))
 	
@@ -7723,21 +7726,22 @@
 	(let ()
 	  (define (sp-make-vector caller head form env)
 	    ;; type of initial value (for make-float|int-vector) is checked elsewhere
-	    (if (and (= (length form) 4)
-		     (eq? head 'make-vector))   ;  (make-vector 3 0 #t)
-		(lint-format "make-vector no longer has a fourth argument: ~A" caller form))
-	    
-	    (if (>= (length form) 3)
-		(case (caddr form)
-		  ((#<unspecified>) 
-		   (if (eq? head 'make-vector)  ;  (make-vector 3 #<unspecified>)
-		       (lint-format "#<unspecified> is the default initial value in ~A" caller form)))
-		  ((0)
-		   (if (not (eq? head 'make-vector))
-		       (lint-format "0 is the default initial value in ~A" caller form)))
-		  ((0.0)
-		   (if (eq? head 'make-float-vector)
-		       (lint-format "0.0 is the default initial value in ~A" caller form)))))
+	    (when (>= (length form) 3)
+	      (case (caddr form)
+		((#<unspecified>) 
+		 (if (eq? head 'make-vector)  ;  (make-vector 3 #<unspecified>)
+		     (lint-format "#<unspecified> is the default initial value in ~A" caller form)))
+		((0)
+		 (if (not (eq? head 'make-vector))
+		     (lint-format "0 is the default initial value in ~A" caller form)))
+		((0.0)
+		 (if (eq? head 'make-float-vector)
+		     (lint-format "0.0 is the default initial value in ~A" caller form))))
+
+	      (when (= (length form) 4)
+		(let ((typer (cadddr form)))
+		  (unless (memq typer setters)
+		    (lint-format "~A is not a built-in type" caller (cadddr form))))))
 	    
 	    (when (and (pair? (cdr form))
 		       (integer? (cadr form))
@@ -7758,7 +7762,7 @@
 		       (zero? (cadr form)))
 	      (if (pair? (cddr form))           ; (make-byte-vector 0 0)
 		  (lint-format "initial value is pointless here: ~A" caller form))
-	      (lint-format "perhaps ~A" caller (lists->string form (if (eq? head 'make-string) "" #u8())))))
+	      (lint-format "perhaps ~A" caller (lists->string form (if (eq? head 'make-string) "" #u())))))
 	  (for-each (lambda (f)
 		      (hash-special f sp-make-string))
 		    '(make-string make-byte-vector)))
@@ -8624,6 +8628,8 @@
 	      (lambda (head str caller form)
 		(let ((curlys 0)
 		      (dirs 0)
+		      (tildes 1)
+		      (returns 0)
 		      (pos (char-position #\~ str)))
 		  (when pos
 		    (do ((len (length str))
@@ -8674,6 +8680,7 @@
 			    (case c 
 			      ((#\{) (set! curlys (+ curlys 1)))
 			      ((#\}) (set! curlys (- curlys 1)))
+			      ((#\%) (set! returns (+ returns 1)))
 			      ((#\^ #\|)
 			       (if (zero? curlys)   ; (format #f "~^")
 				   (lint-format "~A has ~~~C outside ~~{~~}?" caller str c))))
@@ -8683,10 +8690,11 @@
 					     (substring str (- i 1) (+ i 3))
 					     str
 					     (substring str (- i 1) (+ i 1)))))
-			  (begin
+			  (begin ; not tilde-time
 			    (set! pos (char-position #\~ str i))
 			    (if pos 
 				(begin
+				  (set! tildes (+ tildes 1))
 				  (set! tilde-time #t)
 				  (set! i pos))
 				(set! i len))))))
@@ -8698,6 +8706,19 @@
 				   (if (positive? curlys) "{" "}") 
 				   (if (> curlys 1) "s" "") 
 				   (truncated-list->string form)))
+		  (if (and (= tildes returns)
+			   (not (cadr form))                ; (format #f "...~%..." -> "...\n..."
+			   (positive? tildes))
+		      (lint-format "format is not needed in ~S: perhaps use \"~A\" instead"
+				   caller form
+				   (let ((strc (copy str))
+					 (len (length str)))
+				     (do ((i 0 (+ i 1)))
+					 ((>= i len) strc)
+				       (when (char=? (string-ref str i) #\~)
+					 (string-set! strc i #\\)
+					 (set! i (+ i 1))
+					 (string-set! strc i #\n))))))
 		  dirs))))
 	  
 	  (define (sp-format caller head form env)
@@ -8872,8 +8893,7 @@
 		
 		(let ((str (cadr form)))
 		  
-		  (when (and (string? str)           ; (substring "++++++" 0 2) -> (make-string 2 #\+)
-			     (not (byte-vector? str)))
+		  (when (string? str)           ; (substring "++++++" 0 2) -> (make-string 2 #\+)
 		    (let ((len (length str)))
 		      (when (and (> len 0)
 				 (string=? str (make-string len (string-ref str 0))))
@@ -9346,13 +9366,13 @@
 					  (pair? (cddr arg1))))
 				 (len>1? (cadr arg1))
 				 (memq (caadr arg1) '(string->list vector->list)))
-			(let ((string-case (eq? (caadr arg1) 'string->list))    ; (cdr (vector->list v)) -> (make-shared-vector v (- (length v) 1) 1)
+			(let ((string-case (eq? (caadr arg1) 'string->list))    ; (cdr (vector->list v)) -> (subvector v (- (length v) 1) 1)
 			      (len-diff (case (car arg1) ((list-tail) (caddr arg1)) (else => cdr-count))))
 			  (lint-format "~A accepts ~A arguments, so perhaps ~A" caller head 
 				       (if string-case 'string 'vector)
 				       (lists->string arg1 (if string-case
 							       (list 'substring (cadadr arg1) len-diff)
-							       `(make-shared-vector ,(cadadr arg1) (- (length ,(cadadr arg1)) ,len-diff) ,len-diff)))))))
+							       `(subvector ,(cadadr arg1) (- (length ,(cadadr arg1)) ,len-diff) ,len-diff)))))))
 		    (when (and (eq? head 'for-each)
 			       (len>1? (cadr form))            ; (for-each (lambda (x) (+ (abs x) 1)) lst)
 			       (eq? (caadr form) 'lambda)
@@ -9946,9 +9966,9 @@
 				      '(print-length safety cpu-time heap-size max-heap-size free-heap-size gc-freed max-string-length max-list-length 
 				        max-vector-length max-vector-dimensions default-hash-table-length initial-string-port-length memory-usage
 					gc-protected-objects file-names rootlet-size c-types stack-top stack-size stacktrace-defaults
-					max-stack-size stack catches exits float-format-precision bignum-precision default-rationalize-error 
+					max-stack-size stack catches float-format-precision bignum-precision default-rationalize-error 
 					default-random-state morally-equal-float-epsilon hash-table-float-epsilon undefined-identifier-warnings 
-					gc-stats symbol-table-locked? c-objects history-size history profile-info autoloading?))
+					gc-stats history-size history profile-info autoloading? max-format-length))
 			    h)))
 	   (lambda (caller head form env)
 	     (if (len=2? form)
@@ -10002,6 +10022,7 @@
 				(current-environment . curlet)
 				(make-procedure-with-setter . dilambda)
 				(procedure-with-setter? . dilambda?)
+				(symbol-setter . setter)
 				(make-keyword . string->keyword)
 				(make-random-state . random-state))))
 
@@ -11924,7 +11945,7 @@
 		   (reducible-scope caller local-var otype env)
 		   (if (and (eq? (var-ftype local-var) 'define-expansion)
 			    (not (eq? caller top-level:)))
-		       (format outport "~NCdefine-expansion for ~A is not at the top-level, so it is ignored~%" 
+		       (format outport "~NCdefine-expansion for ~A is not at the top-level, so it is simply define-macro~%" 
 			       lint-left-margin #\space
 			       (var-name local-var)))
 		   
@@ -14761,12 +14782,12 @@
 							   ((let-ref) 'let-set!))
 							 (append (cdadr form) (cddr form))))))
 				    
-				    ((and (eq? target 'symbol-setter)
+				    ((and (eq? target 'setter)
 					  (len>1? setval)
 					  (eq? (car setval) 'lambda)
 					  (list? (cadr setval))
 					  (not (= (length (cadr setval)) 2)))
-				     (lint-format "symbol-setter function should take 2 arguments: ~A" caller (truncated-list->string form)))
+				     (lint-format "setter function should take 2 arguments: ~A" caller (truncated-list->string form)))
 				    
 				    ((or (string? target)
 					 (vector? target))
@@ -15313,9 +15334,6 @@
 		       (lint-format "perhaps ~A" caller (lists->string form false))))
 		  
 		  ((code-equal? true false)   ; (if x (+ y 1) (+ y 1)) -> (+ y 1)
-		   ;; this uses equal? so it thinks "" and #u8() are the same
-		   ;;   but so does string=?: (string=? "" #u8()) -> #t, eq? might work
-		   ;;   or (eq? (->simple-type true) (->simple-type false)) if one is code-constant
 		   (lint-format "if is not needed here: ~A" caller 
 				(lists->string form (if (not (side-effect? expr env))
 							true
@@ -21472,7 +21490,7 @@
 	
 	;; -------- walk head=symbol --------
 	(denote walk-symbol 
-	  (letrec ((unsafe-makers '(sublet inlet copy cons list append make-shared-vector vector hash-table hash-table* 
+	  (letrec ((unsafe-makers '(sublet inlet copy cons list append subvector vector hash-table hash-table* 
 				    make-hash-table make-hook list-values append gentemp or and not))
 		   
 		   (equal-ignoring-constants? 
@@ -22072,13 +22090,13 @@
 	    ((string? form)
 	     (let ((len (length form)))
 	       (when (and (> len 8)               ; "*****************************" -> (format #f "~NC" 29 #\*)
-			  (not (byte-vector? form))
 			  (string=? form (make-string len (string-ref form 0))))
 		 (lint-format "perhaps ~S -> ~A" caller form `(format #f "~NC" ,len ,(string-ref form 0)))))
 	     env)
 
 	    ((vector? form)
 	     (unless (or (int-vector? form)
+			 (byte-vector? form)
 			 (float-vector? form))
 	       (let ((len (length form)))
 		 (when (positive? len)
@@ -22453,7 +22471,7 @@
 				       
 				       ((#\v) ; r6rs byte-vectors?
 					(if (string=? data "vu8")
-					    (format outport "~NCuse #u8 in s7, not #vu8~%" lint-left-margin #\space))
+					    (format outport "~NCuse #u in s7, not #vu8~%" lint-left-margin #\space))
 					(string->symbol data))
 				       
 				       ((#\>) ; for Chicken, apparently #>...<# encloses in-place C code
@@ -22551,7 +22569,8 @@
 	(set! *report-nested-if* (if (integer? *report-nested-if*) (max 3 *report-nested-if*) 4))
 	(set! *report-short-branch* (if (integer? *report-short-branch*) (max 0 *report-short-branch*) 12))
 	(set! *#readers* readers)
-	(set! (hook-functions *read-error-hook*) read-hooks)
+	(unless (defined? 'lint-no-read-error)
+	  (set! (hook-functions *read-error-hook*) read-hooks))
 
 	;; preset list-tail and list-ref
 	(vector-set! fragments 10 (make-hash-table))
@@ -22783,5 +22802,5 @@
     #f))
 |#
 
-;;; 64 917553
+;;; 64 918856
 
